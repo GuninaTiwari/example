@@ -1,0 +1,50 @@
+import pandas as pd
+import os
+from datetime import datetime
+
+# Input Excel file का नाम
+input_file = "input.xlsx"
+
+# Output folder
+output_folder = "output_groups"
+os.makedirs(output_folder, exist_ok=True)
+
+# Excel file की दोनों sheets पढ़ो
+data_df = pd.read_excel(input_file, sheet_name="Sheet1")
+mapping_df = pd.read_excel(input_file, sheet_name="Sheet2")
+
+# चेक करो कि जरूरी columns मौजूद हैं
+if "Assignment Group" not in data_df.columns:
+    raise ValueError("Sheet1 में 'Assignment Group' कॉलम missing है!")
+if not {"Assignment Group", "Tower"}.issubset(mapping_df.columns):
+    raise ValueError("Sheet2 में 'Assignment Group' और 'Tower' दोनों कॉलम होने चाहिए!")
+
+# सिर्फ date निकाल लो Created और Closed से (अगर exist करते हैं)
+for col in ["Created", "Closed"]:
+    if col in data_df.columns:
+        data_df[col] = pd.to_datetime(data_df[col], errors="coerce").dt.date
+
+# Month का नाम निकालो
+current_month = datetime.now().strftime("%B%Y")  # e.g., September2025
+
+# Mapping dictionary बनाओ
+mapping_dict = dict(zip(mapping_df["Assignment Group"], mapping_df["Tower"]))
+
+# हर Assignment Group के लिए अलग फाइल बनाओ
+for group_name, group_data in data_df.groupby("Assignment Group"):
+    # Tower निकालो (अगर missing है तो "UnknownTower")
+    tower_name = mapping_dict.get(group_name, "UnknownTower")
+    
+    # Safe नाम बना दो
+    safe_tower = str(tower_name).replace("/", "_").replace("\\", "_").replace(" ", "_")
+    safe_group = str(group_name).replace("/", "_").replace("\\", "_").replace(" ", "_")
+    
+    # File name बनाओ
+    file_name = f"{safe_tower}_{safe_group}_{current_month}.xlsx"
+    output_file = os.path.join(output_folder, file_name)
+    
+    # Data save करो
+    group_data.to_excel(output_file, index=False)
+    print(f"Saved: {output_file}")
+
+print("✅ सब reports बन गईं (date अब सही दिखेगी)!")
