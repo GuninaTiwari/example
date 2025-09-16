@@ -1,0 +1,12 @@
+FMA Template Guidelines:
+1.      Sheet name should be ‘FMAData’.
+2.      Below fields are mandatory fields:
+·         Call Reference
+·         Open-date
+·         Problem Summary
+·    Category
+·     Application Name
+·         Failure Point (If data is historical)
+3.       ‘Open-date’ and ‘Closed At’ format should be ‘mm-dd-yyyy’  (eg.11-25-2014)
+
+Note:- Potential cause:- This column should contain cause analysis text which is done by resource while resolving a ticket.
