@@ -1,0 +1,124 @@
+import pandas as pd
+import os
+from datetime import datetime
+from openpyxl import load_workbook
+from openpyxl.styles import PatternFill, Font
+
+# Input Excel file
+input_file = "input.xlsx"
+
+# Output folder
+output_folder = "output_groups"
+os.makedirs(output_folder, exist_ok=True)
+
+# Read both sheets
+data_df = pd.read_excel(input_file, sheet_name="Sheet1")
+mapping_df = pd.read_excel(input_file, sheet_name="Sheet2")
+
+# Check required columns
+if "Assignment Group" not in data_df.columns:
+    raise ValueError("Sheet1 में 'Assignment Group' कॉलम missing है!")
+if not {"Assignment Group", "Tower"}.issubset(mapping_df.columns):
+    raise ValueError("Sheet2 में 'Assignment Group' और 'Tower' दोनों कॉलम होने चाहिए!")
+
+# Convert Created/Closed to only date
+for col in ["Created", "Closed"]:
+    if col in data_df.columns:
+        data_df[col] = pd.to_datetime(data_df[col], errors="coerce").dt.strftime("%m-%d-%Y")
+
+# Clean priority → keep only number
+if "Priority" in data_df.columns:
+    data_df["Priority"] = data_df["Priority"].astype(str).str.split("-").str[0].str.strip()
+
+# Current month
+current_month = datetime.now().strftime("%B%Y")
+
+# Mapping dict
+mapping_dict = dict(zip(mapping_df["Assignment Group"], mapping_df["Tower"]))
+
+# Column rename mapping
+rename_map = {
+    "Number": "Call Reference",
+    "Created": "Open-date",
+    "Description": "Problem Summary",
+    "Assignment Group": "Application Name",
+    "Task type": "Call Type",
+    "Short description": "Title",
+    "Closed": "Closed At",
+    "Closed by": "Closed by (Person)"
+}
+
+# Final column order
+final_columns = [
+    "Call Reference",
+    "Open-date",
+    "Problem Summary",
+    "Potential Cause",
+    "Category",
+    "Application Name",
+    "Call Type",
+    "Title",
+    "Priority",
+    "Closed At",
+    "Closed by (Person)",
+    "Fixed By (Person)",
+    "Failure Point",
+    "Process",
+    "Module",
+    "Region",
+    "Solution Text"
+]
+
+# Colors
+yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+red_font = Font(color="FF0000", bold=True)
+
+blue_fill = PatternFill(start_color="0000FF", end_color="0000FF", fill_type="solid")
+white_font = Font(color="FFFFFF", bold=True)
+
+# Process each group
+for group_name, group_data in data_df.groupby("Assignment Group"):
+    tower_name = mapping_dict.get(group_name, "UnknownTower")
+
+    # Rename columns
+    temp_df = group_data.rename(columns=rename_map)
+
+    # Add missing columns
+    for col in final_columns:
+        if col not in temp_df.columns:
+            temp_df[col] = ""
+
+    # Fixed By (Person) = Closed by (Person)
+    if "Closed by (Person)" in temp_df.columns:
+        temp_df["Fixed By (Person)"] = temp_df["Closed by (Person)"]
+
+    # Reorder
+    temp_df = temp_df[final_columns]
+
+    # Save to Excel with sheetname = FMAData
+    safe_tower = str(tower_name).replace("/", "_").replace("\\", "_").replace(" ", "_")
+    safe_group = str(group_name).replace("/", "_").replace("\\", "_").replace(" ", "_")
+
+    file_name = f"{safe_tower}_{safe_group}_{current_month}.xlsx"
+    output_file = os.path.join(output_folder, file_name)
+
+    temp_df.to_excel(output_file, index=False, sheet_name="FMAData")
+
+    # Formatting with openpyxl
+    wb = load_workbook(output_file)
+    ws = wb["FMAData"]
+
+    # Apply formatting
+    for col_idx, col_name in enumerate(final_columns, start=1):
+        cell = ws.cell(row=1, column=col_idx)
+        if col_name in ["Call Reference", "Open-date", "Problem Summary", "Potential Cause", "Category", "Application Name", "Call Type"]:
+            cell.fill = yellow_fill
+            cell.font = red_font
+        else:
+            cell.fill = blue_fill
+            cell.font = white_font
+
+    wb.save(output_file)
+    print(f"✅ Saved: {output_file}")
+
+print("🎉 All reports created successfully with template formatting!")
