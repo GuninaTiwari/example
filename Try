@@ -1,0 +1,30 @@
+import pandas as pd
+import os
+
+# Input Excel file का नाम (अपनी फाइल का नाम डालें)
+input_file = "input.xlsx"
+
+# Output folder (जहाँ नई फाइलें सेव होंगी)
+output_folder = "output_groups"
+
+# अगर output folder नहीं है तो बना दें
+os.makedirs(output_folder, exist_ok=True)
+
+# Excel file पढ़ो
+df = pd.read_excel(input_file)
+
+# चेक कर लो कि "Assignment Group" कॉलम है
+if "Assignment Group" not in df.columns:
+    raise ValueError("Excel file में 'Assignment Group' नाम का column नहीं मिला!")
+
+# हर यूनिक ग्रुप के लिए अलग फाइल बनाओ
+for group_name, group_data in df.groupby("Assignment Group"):
+    # ग्रुप का नाम फाइल के लिए safe बना दो
+    safe_name = str(group_name).replace("/", "_").replace("\\", "_").replace(" ", "_")
+    output_file = os.path.join(output_folder, f"{safe_name}.xlsx")
+    
+    # उस ग्रुप का data लिख दो
+    group_data.to_excel(output_file, index=False)
+    print(f"Saved: {output_file}")
+
+print("✅ सब ग्रुप्स की फाइलें बन गईं!")
