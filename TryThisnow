@@ -1,0 +1,107 @@
+import pandas as pd
+import os
+from openpyxl import load_workbook
+from openpyxl.styles import Border, Side
+
+# ---------------------------
+# File paths
+# ---------------------------
+input_file = "input.xlsx"              # Source data file
+template_file = "template.xlsx"        # Pre-existing template
+output_folder = "output_reports"       # Folder for saving reports
+
+os.makedirs(output_folder, exist_ok=True)
+
+# ---------------------------
+# Read input data
+# ---------------------------
+data_df = pd.read_excel(input_file)
+
+# Column renaming mapping
+col_mapping = {
+    "Number": "Call Reference",
+    "Created": "Open-date",
+    "Description": "Problem Summary",
+    "Assignment group": "Application Name",
+    "Task type": "Call Type",
+    "Short description": "Title",
+    "Closed": "Closed At",
+    "Closed by": "Closed by (Person)"
+}
+
+# Rename columns
+data_df = data_df.rename(columns={k: v for k, v in col_mapping.items() if k in data_df.columns})
+
+# Add extra columns if not present
+extra_cols = ["Potential Cause", "Failure Point", "Process", "Module", "Region", "Solution Text"]
+for col in extra_cols:
+    if col not in data_df.columns:
+        data_df[col] = ""
+
+# Fixed By = Closed by (Person)
+if "Closed by (Person)" in data_df.columns:
+    data_df["Fixed By (Person)"] = data_df["Closed by (Person)"]
+else:
+    data_df["Fixed By (Person)"] = ""
+
+# Format Open-date and Closed At (date only, no time)
+for date_col in ["Open-date", "Closed At"]:
+    if date_col in data_df.columns:
+        data_df[date_col] = pd.to_datetime(data_df[date_col], errors="coerce").dt.strftime("%m-%d-%Y")
+
+# Clean priority (keep only number part before "-")
+if "Priority" in data_df.columns:
+    data_df["Priority"] = data_df["Priority"].astype(str).str.split("-").str[0].str.strip()
+
+# Final column order
+final_cols = [
+    "Call Reference", "Open-date", "Problem Summary", "Potential Cause", "Category",
+    "Application Name", "Call Type", "Title", "Priority", "Closed At",
+    "Closed by (Person)", "Fixed By (Person)", "Failure Point",
+    "Process", "Module", "Region", "Solution Text"
+]
+data_df = data_df[[col for col in final_cols if col in data_df.columns]]
+
+# ---------------------------
+# Borders style
+# ---------------------------
+thin_border = Border(left=Side(style='thin'),
+                     right=Side(style='thin'),
+                     top=Side(style='thin'),
+                     bottom=Side(style='thin'))
+
+# ---------------------------
+# Process each Assignment group
+# ---------------------------
+for group_name, group_data in data_df.groupby("Application Name"):
+    output_path = os.path.join(output_folder, f"{group_name}.xlsx")
+
+    # Load template
+    wb = load_workbook(template_file)
+    ws = wb["FMAData"]
+
+    # ---------------------------
+    # Step 1: Clear existing data (rows below header)
+    # ---------------------------
+    if ws.max_row > 1:
+        ws.delete_rows(2, ws.max_row)
+
+    # ---------------------------
+    # Step 2: Insert new data
+    # ---------------------------
+    for row in group_data.itertuples(index=False, name=None):
+        ws.append(row)
+
+    # ---------------------------
+    # Step 3: Apply borders dynamically
+    # ---------------------------
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, max_col=ws.max_column):
+        for cell in row:
+            cell.border = thin_border
+
+    # ---------------------------
+    # Step 4: Save output file
+    # ---------------------------
+    wb.save(output_path)
+
+print("✅ Reports generated successfully with template, data cleared, and borders applied!")
