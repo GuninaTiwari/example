@@ -1,0 +1,81 @@
+import pandas as pd
+import os
+from datetime import datetime
+from openpyxl import load_workbook
+
+# Input files
+input_file = "FMA Data for July and August.xlsx"          # main data file
+template_file = "FMATemp.xlsx"    # pre-existing template file
+
+# Output folder
+output_folder = "Reports"
+os.makedirs(output_folder, exist_ok=True)
+
+# Read data
+data_df = pd.read_excel(input_file, sheet_name="Page 1")
+mapping_df = pd.read_excel(input_file, sheet_name="Tower Mapping")
+
+# Mapping dict for Tower
+mapping_dict = dict(zip(mapping_df["Assignment group"], mapping_df["Tower"]))
+
+# Clean dates (keep only date, no time)
+for col in ["Created", "Closed"]:
+    if col in data_df.columns:
+        data_df[col] = pd.to_datetime(data_df[col], errors="coerce").dt.date
+
+# Clean priority (keep only number part)
+if "Priority" in data_df.columns:
+    data_df["Priority"] = data_df["Priority"].astype(str).str.split("-").str[0].str.strip()
+
+# Current month
+current_month = datetime.now().strftime("%B")
+
+# Column rename mapping (from main file to template names)
+rename_map = {
+    "Number": "Call Reference",
+    "Created": "Open-date",
+    "Description": "Problem Summary",
+    "Assignment group": "Application Name",
+    "Task type": "Call Type",
+    "Short description": "Title",
+    "Closed": "Closed At",
+    "Closed by": "Closed By (Person)"
+}
+
+# Process each Assignment Group
+for group_name, group_data in data_df.groupby("Assignment group"):
+    tower_name = mapping_dict.get(group_name, "UnknownTower")
+
+    # Rename columns to match template
+    temp_df = group_data.rename(columns=rename_map)
+
+    # Load template (make a copy per group)
+    wb = load_workbook(template_file)
+    ws = wb.active  
+    ws.delete_rows(2, ws.max_row)  
+    # Write header (template already has headers, skip if not needed)
+    headers = [cell.value for cell in ws[1]]
+
+    # Ensure Fixed By (Person) = Closed by (Person)
+    if "Closed By (Person)" in temp_df.columns:
+        temp_df["Fixed By (Person)"] = temp_df["Closed By (Person)"]
+
+    # Reorder to match template headers
+    temp_df = temp_df.reindex(columns=headers, fill_value="")
+
+    # Append data rows to template
+    for row in temp_df.itertuples(index=False, name=None):
+        ws.append(row)
+
+    # Build filename
+    safe_tower = str(tower_name)
+    safe_group = str(group_name)
+
+    file_name = f"{safe_tower}_{safe_group}_{current_month}.xlsx"
+    output_file = os.path.join(output_folder, file_name)
+
+    wb.save(output_file)
+    print(f"✅ Saved: {output_file}")
+
+print(" All reports created from template successfully!")
+               
