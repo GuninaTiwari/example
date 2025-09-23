@@ -1,0 +1,41 @@
+from bs4 import BeautifulSoup
+import pandas as pd
+from openpyxl import Workbook
+
+# अपनी HTML फाइल का path यहाँ डालें
+html_file = "your_file.html"
+
+# HTML फाइल पढ़ना
+with open(html_file, "r", encoding="utf-8") as f:
+    soup = BeautifulSoup(f, "html.parser")
+
+# नया Excel Workbook
+wb = Workbook()
+# डिफ़ॉल्ट वाली पहली sheet को हटा देंगे
+default_sheet = wb.active
+wb.remove(default_sheet)
+
+# सारे "Table: ..." sections ढूँढना
+for tag in soup.find_all(text=lambda t: "Table:" in t):
+    table_name = tag.split("Table:")[-1].strip()  # Table का नाम
+    print("Processing:", table_name)
+
+    # "Columns" heading ढूँढना
+    columns_heading = tag.find_next(string=lambda t: "Columns" in t)
+
+    # Columns के बाद पहला <table> लेना
+    table_tag = columns_heading.find_next("table") if columns_heading else None
+
+    if table_tag:
+        # HTML टेबल को pandas dataframe में बदलना
+        df = pd.read_html(str(table_tag))[0]
+
+        # Excel में नई Sheet बनाना
+        ws = wb.create_sheet(title=table_name[:31])  # Excel limit: 31 char
+        for r in df.itertuples(index=False):
+            ws.append(r)
+
+# Excel सेव करना
+output_file = "output.xlsx"
+wb.save(output_file)
+print("Excel file saved as:", output_file)
