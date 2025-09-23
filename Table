@@ -1,0 +1,54 @@
+import requests
+from bs4 import BeautifulSoup
+from openpyxl import Workbook
+
+# Agar HTML file local hai to open karke padhna
+with open("oracle_page.html", "r", encoding="utf-8") as f:
+    html_content = f.read()
+
+# Agar hosted URL se laana ho to:
+# url = "http://oraclehostedpage.example"
+# html_content = requests.get(url).text
+
+soup = BeautifulSoup(html_content, "html.parser")
+
+# Excel workbook
+wb = Workbook()
+# Default sheet hata dena
+wb.remove(wb.active)
+
+# Sabhi "view : (table_name)" search karna
+for view_tag in soup.find_all(string=lambda text: text and "view :" in text.lower()):
+    table_name = view_tag.split(":")[1].strip().strip("()")
+
+    # Next "Columns" ke neeche wali table nikalna
+    columns_header = None
+    for sibling in view_tag.parent.find_all_next():
+        if sibling.name and sibling.get_text(strip=True).lower() == "columns":
+            columns_header = sibling
+            break
+
+    if not columns_header:
+        continue
+
+    # Columns heading ke baad jo pehla table hai usko lena
+    table = columns_header.find_next("table")
+    if not table:
+        continue
+
+    # Table ka data nikalna
+    rows = []
+    for tr in table.find_all("tr"):
+        row = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
+        if row:
+            rows.append(row)
+
+    # Excel sheet banao
+    ws = wb.create_sheet(title=table_name[:31])  # Excel me max 31 char allowed
+    for r_idx, row in enumerate(rows, 1):
+        for c_idx, cell in enumerate(row, 1):
+            ws.cell(row=r_idx, column=c_idx, value=cell)
+
+# Save excel file
+wb.save("oracle_tables.xlsx")
+print("Excel file ban gayi: oracle_tables.xlsx")
