@@ -1,0 +1,36 @@
+from bs4 import BeautifulSoup
+import pandas as pd
+
+# अपनी HTML फाइल का path डालें
+html_file = "your_file.html"
+
+# HTML पढ़ना
+with open(html_file, "r", encoding="utf-8") as f:
+    soup = BeautifulSoup(f, "html.parser")
+
+# Excel writer बनाना
+output_file = "output.xlsx"
+with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
+    # सारे Table sections निकालना
+    for tag in soup.find_all(text=lambda t: "Table:" in t):
+        table_name = tag.split("Table:")[-1].strip()
+
+        # "Columns" heading ढूँढना
+        columns_heading = tag.find_next(string=lambda t: "Columns" in t)
+
+        # Columns के बाद पहला <table> लेना
+        table_tag = columns_heading.find_next("table") if columns_heading else None
+
+        if table_tag:
+            try:
+                df = pd.read_html(str(table_tag), flavor="lxml")[0]
+            except:
+                df = pd.read_html(str(table_tag), flavor="html5lib")[0]
+
+            # Sheet name max 31 chars होता है Excel में
+            safe_name = table_name[:31]
+
+            # DataFrame को Excel में लिखना
+            df.to_excel(writer, sheet_name=safe_name, index=False)
+
+print("✅ Excel successfully created:", output_file)
