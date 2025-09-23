@@ -1,0 +1,33 @@
+from bs4 import BeautifulSoup
+import pandas as pd
+from openpyxl import Workbook
+
+html_file = "your_file.html"
+
+with open(html_file, "r", encoding="utf-8") as f:
+    soup = BeautifulSoup(f, "html.parser")
+
+wb = Workbook()
+wb.remove(wb.active)
+
+for tag in soup.find_all(text=lambda t: "Table:" in t):
+    table_name = tag.split("Table:")[-1].strip()
+    print("Processing:", table_name)
+
+    columns_heading = tag.find_next(string=lambda t: "Columns" in t)
+    table_tag = columns_heading.find_next("table") if columns_heading else None
+
+    if table_tag:
+        try:
+            df = pd.read_html(str(table_tag), flavor="lxml")[0]
+        except:
+            df = pd.read_html(str(table_tag), flavor="html5lib")[0]
+
+        ws = wb.create_sheet(title=table_name[:31])
+        ws.append(list(df.columns))
+        for r in df.itertuples(index=False):
+            ws.append(r)
+
+output_file = "output.xlsx"
+wb.save(output_file)
+print("Excel file saved as:", output_file)
