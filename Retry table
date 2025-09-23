@@ -1,0 +1,114 @@
+import pdfplumber
+import re
+import openpyxl
+from openpyxl.styles import Border, Side
+
+# === INPUT / OUTPUT FILES ===
+pdf_path = "input.pdf"
+output_excel = "output.xlsx"
+
+# === EXCEL workbook create ===
+wb = openpyxl.Workbook()
+wb.remove(wb.active)  # remove default empty sheet
+
+# === Border style ===
+thin_border = Border(
+    left=Side(style="thin"),
+    right=Side(style="thin"),
+    top=Side(style="thin"),
+    bottom=Side(style="thin")
+)
+
+def group_by_columns(words, tolerance=15):
+    """
+    Words ko unke x0 coordinate ke basis par columns me group karta hai
+    tolerance = allowed gap between same column words
+    """
+    # unique x0 positions nikaalo
+    x_positions = sorted(set(round(w["x0"]) for w in words))
+    
+    # cluster banao (close values ko ek column treat karo)
+    clusters = []
+    for x in x_positions:
+        if not clusters or abs(x - clusters[-1][-1]) > tolerance:
+            clusters.append([x])
+        else:
+            clusters[-1].append(x)
+    column_centers = [sum(c)/len(c) for c in clusters]
+
+    # ab words ko nearest column assign karo
+    rows = {}
+    for w in words:
+        col_index = min(range(len(column_centers)), key=lambda i: abs(w["x0"]-column_centers[i]))
+        row_y = round(w["top"])  # y position ke basis par row group
+        rows.setdefault(row_y, {})[col_index] = w["text"]
+
+    # sorted rows
+    sorted_rows = []
+    for y in sorted(rows.keys()):
+        row = [rows[y].get(i, "") for i in range(len(column_centers))]
+        sorted_rows.append(row)
+
+    return sorted_rows
+
+
+with pdfplumber.open(pdf_path) as pdf:
+    current_table_name = None
+    capturing = False
+    collected_words = []
+
+    for page in pdf.pages:
+        words = page.extract_words()
+        lines = page.extract_text().split("\n") if page.extract_text() else []
+
+        for line in lines:
+            # Table name detection
+            match = re.match(r"Table\s*:\s*(.+)", line, re.IGNORECASE)
+            if match:
+                # Pehle ka data save karo
+                if current_table_name and collected_words:
+                    table_rows = group_by_columns(collected_words)
+
+                    # Write to Excel
+                    sheet = wb.create_sheet(title=current_table_name[:31])
+                    sheet.append(["Seq"] + table_rows[0])  # header row
+                    for idx, row in enumerate(table_rows[1:], start=1):
+                        sheet.append([idx] + row)
+                    # border apply
+                    for row in sheet.iter_rows():
+                        for cell in row:
+                            cell.border = thin_border
+
+                # Naya table start
+                current_table_name = match.group(1).strip()
+                collected_words = []
+                capturing = False
+
+            # Capture start at "Columns"
+            if re.match(r"^\s*Columns\s*$", line, re.IGNORECASE):
+                capturing = True
+                continue
+
+            # Agar capturing mode hai aur koi aur heading start ho gayi
+            if capturing and re.match(r"^(Table|Description|Primary key|Foreign key|Indexes|Comments)\s*:", line, re.IGNORECASE):
+                capturing = False
+
+        # Agar capturing mode hai to is page ke words collect karo
+        if capturing:
+            collected_words.extend(words)
+
+    # Last table save
+    if current_table_name and collected_words:
+        table_rows = group_by_columns(collected_words)
+
+        sheet = wb.create_sheet(title=current_table_name[:31])
+        sheet.append(["Seq"] + table_rows[0])  # header row
+        for idx, row in enumerate(table_rows[1:], start=1):
+            sheet.append([idx] + row)
+        for row in sheet.iter_rows():
+            for cell in row:
+                cell.border = thin_border
+
+# Save workbook
+wb.save(output_excel)
+print(f"✅ Excel file created: {output_excel}")
