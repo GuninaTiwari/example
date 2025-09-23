@@ -1,0 +1,47 @@
+import pdfplumber
+import pandas as pd
+import re
+
+# Input PDF aur output Excel
+pdf_file = "input.pdf"
+excel_file = "output.xlsx"
+
+# Excel writer create
+writer = pd.ExcelWriter(excel_file, engine="openpyxl")
+
+with pdfplumber.open(pdf_file) as pdf:
+    current_table_name = None
+    table_data = []
+    
+    for page in pdf.pages:
+        text = page.extract_text()
+        lines = text.split("\n")
+        
+        for i, line in enumerate(lines):
+            # Table name detect karna
+            match = re.match(r"Table\s*:\s*(.+)", line)
+            if match:
+                # Agar pehle koi table tha, usko save karo
+                if current_table_name and table_data:
+                    df = pd.DataFrame(table_data[1:], columns=table_data[0])
+                    df.to_excel(writer, sheet_name=current_table_name[:31], index=False)
+                    table_data = []
+                
+                # Naya table start
+                current_table_name = match.group(1).strip()
+            
+            # Columns table start
+            if "Columns" in line:
+                # page se table extract karo
+                tables = page.extract_tables()
+                if tables:
+                    # Pehla table le lo
+                    table_data = tables[0]
+
+    # Last table ko bhi save karna hoga
+    if current_table_name and table_data:
+        df = pd.DataFrame(table_data[1:], columns=table_data[0])
+        df.to_excel(writer, sheet_name=current_table_name[:31], index=False)
+
+writer.close()
+print(f"Excel file saved: {excel_file}")
