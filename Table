@@ -1,3 +1,6 @@
+requests.exceptions.SSLError: HTTPSConnectionPool(host='etrm.live', port=443): Max retries exceeded with url: /etrm-12.1.1/etrm.oracle.com/pls/et1211d9/AR_Tables2cb7.html (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1032)')))
+
+
 import requests
 from bs4 import BeautifulSoup
 from openpyxl import Workbook
