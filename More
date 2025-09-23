@@ -1,0 +1,81 @@
+import pdfplumber
+import re
+import openpyxl
+from openpyxl.styles import Border, Side
+
+pdf_path = "input.pdf"
+output_excel = "output.xlsx"
+
+# Workbook create
+wb = openpyxl.Workbook()
+wb.remove(wb.active)
+
+# Border style
+thin_border = Border(
+    left=Side(style="thin"),
+    right=Side(style="thin"),
+    top=Side(style="thin"),
+    bottom=Side(style="thin")
+)
+
+with pdfplumber.open(pdf_path) as pdf:
+    table_name = None
+    capture = False
+    current_table = []
+
+    for page in pdf.pages:
+        text = page.extract_text()
+        if not text:
+            continue
+
+        lines = text.split("\n")
+
+        for line in lines:
+            # Table name detect
+            match = re.match(r"Table\s*:\s*(.+)", line, re.IGNORECASE)
+            if match:
+                # Agar pehle ek table mil gaya tha, usko Excel me save karo
+                if table_name and current_table:
+                    sheet = wb.create_sheet(title=table_name[:31])
+                    sheet.append(["Seq"] + current_table[0])  # header
+                    for idx, row in enumerate(current_table[1:], start=1):
+                        sheet.append([idx] + row)
+
+                    # Borders
+                    for row in sheet.iter_rows():
+                        for cell in row:
+                            cell.border = thin_border
+
+                # Naya table start
+                table_name = match.group(1).strip()
+                current_table = []
+                capture = False
+
+            # Capture start jab "Columns" aaye
+            if re.match(r"^\s*Columns\s*$", line, re.IGNORECASE):
+                capture = True
+                continue
+
+            # Agar capture mode on hai aur koi aur heading shuru ho gayi
+            if capture and re.match(r"^(Table|Description|Primary key|Foreign key|Indexes|Comments)\s*:", line, re.IGNORECASE):
+                capture = False
+
+            elif capture:
+                # Split row into columns by 2+ spaces or tabs
+                row = re.split(r"\s{2,}|\t", line.strip())
+                if row and any(cell.strip() for cell in row):
+                    current_table.append(row)
+
+    # Last table bhi save karna hai
+    if table_name and current_table:
+        sheet = wb.create_sheet(title=table_name[:31])
+        sheet.append(["Seq"] + current_table[0])
+        for idx, row in enumerate(current_table[1:], start=1):
+            sheet.append([idx] + row)
+        for row in sheet.iter_rows():
+            for cell in row:
+                cell.border = thin_border
+
+# Save Excel
+wb.save(output_excel)
+print(f"✅ Excel file created: {output_excel}")
