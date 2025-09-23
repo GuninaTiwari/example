@@ -1,0 +1,5 @@
+import requests
+
+url = "https://etrm.live/etrm-12.1.1/etrm.oracle.com/pls/et1211d9/AR_Tables2cb7.html"
+response = requests.get(url, verify=False)  # 👈 verify False
+print(response.text)
