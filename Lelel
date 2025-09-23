@@ -1,0 +1,39 @@
+from bs4 import BeautifulSoup
+import pandas as pd
+
+# HTML file ka naam
+html_file = "Oracle eTRM.html"
+
+# HTML file read
+with open(html_file, "r") as f:
+    soup = BeautifulSoup(f, "html.parser")
+
+# Excel writer
+output_file = "output.xlsx"
+writer = pd.ExcelWriter(output_file, engine="openpyxl")
+
+# Sare Table: sections dhoondho
+for tag in soup.find_all(text=lambda t: "Table:" in t):
+    table_name = tag.split("Table:")[-1].strip()
+
+    # "Columns" ke baad wala table lo
+    columns_heading = tag.find_next(string=lambda t: "Columns" in t)
+    table_tag = columns_heading.find_next("table") if columns_heading else None
+
+    if table_tag:
+        # Table ko dataframe me convert karo
+        try:
+            df = pd.read_html(str(table_tag), flavor="lxml")[0]
+        except:
+            df = pd.read_html(str(table_tag), flavor="html5lib")[0]
+
+        # Excel sheet ka naam (max 31 char hota hai)
+        safe_name = table_name[:31]
+
+        # Dataframe ko Excel sheet me likho
+        df.to_excel(writer, sheet_name=safe_name, index=False)
+
+# Excel file save karo
+writer.close()
+
+print("✅ Excel ban gaya:", output_file)
