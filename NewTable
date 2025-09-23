@@ -1,0 +1,60 @@
+import pdfplumber
+import pandas as pd
+import re
+from openpyxl import load_workbook
+from openpyxl.styles import Border, Side
+
+pdf_file = "input.pdf"
+excel_file = "output.xlsx"
+
+# Excel writer create
+writer = pd.ExcelWriter(excel_file, engine="openpyxl")
+
+with pdfplumber.open(pdf_file) as pdf:
+    current_table_name = None
+    table_data = []
+
+    for page in pdf.pages:
+        text = page.extract_text() or ""
+        lines = text.split("\n")
+
+        for i, line in enumerate(lines):
+            # Detect table name
+            match = re.match(r"Table\s*:\s*(.+)", line)
+            if match:
+                # Save previous table (if exists)
+                if current_table_name and table_data:
+                    df = pd.DataFrame(table_data[1:], columns=table_data[0])
+                    df.insert(0, "Sr_No", range(1, len(df) + 1))
+                    df.to_excel(writer, sheet_name=current_table_name[:31], index=False)
+                    table_data = []
+
+                current_table_name = match.group(1).strip()
+
+            # Detect "Columns" heading and fetch the next table
+            if line.strip() == "Columns":
+                tables = page.extract_tables()
+                if tables:
+                    # Assume the first valid table after "Columns"
+                    table_data = tables[0]
+
+    # Save the last table
+    if current_table_name and table_data:
+        df = pd.DataFrame(table_data[1:], columns=table_data[0])
+        df.insert(0, "Sr_No", range(1, len(df) + 1))
+        df.to_excel(writer, sheet_name=current_table_name[:31], index=False)
+
+writer.close()
+
+# Add borders around all cells
+wb = load_workbook(excel_file)
+for ws in wb.worksheets:
+    thin = Side(border_style="thin", color="000000")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    for row in ws.iter_rows():
+        for cell in row:
+            cell.border = border
+
+wb.save(excel_file)
+print(f"✅ Excel file saved with borders: {excel_file}")
