@@ -1,0 +1,81 @@
+in this code , also print total number of how many times those "table : xyz_table_name" appeared.
+from bs4 import BeautifulSoup
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import Border, Side, Font
+
+# HTML file 
+html_file = "Oracle eTRM.html"
+
+# HTML file read
+with open(html_file, "r") as f:
+    soup = BeautifulSoup(f, "html.parser")
+
+# Excel writer
+output_file = "output.xlsx"
+writer = pd.ExcelWriter(output_file, engine="openpyxl")
+
+# Find all Table: sections
+for tag in soup.find_all(text=lambda t: "Table:" in t):
+    table_name = tag.split("Table:")[-1].strip()
+
+    # "Columns" section
+    columns_heading = tag.find_next(string=lambda t: "Columns" in t)
+    table_tag = columns_heading.find_next("table") if columns_heading else None
+
+    if table_tag:
+        try:
+            df = pd.read_html(str(table_tag), flavor="lxml")[0]
+        except:
+            df = pd.read_html(str(table_tag), flavor="html5lib")[0]
+
+        # Add new columns
+        df.insert(0, "Sequence No.", range(1, len(df) + 1))
+        df.insert(1, "Table Name", table_name)
+
+        # Sheet name 
+        safe_name = table_name[:50]
+
+        # Write name in excel
+        df.to_excel(writer, sheet_name=safe_name, index=False)
+
+# Save file
+writer.close()
+
+# Open file to add borders, bold headers & auto column width
+wb = load_workbook(output_file)
+thin_border = Border(
+    left=Side(style="thin"),
+    right=Side(style="thin"),
+    top=Side(style="thin"),
+    bottom=Side(style="thin")
+)
+
+for sheet in wb.sheetnames:
+    ws = wb[sheet]
+    
+    # Borders + header bold + auto column width
+    for row_idx, row in enumerate(ws.iter_rows()):
+        for cell in row:
+            cell.border = thin_border
+            # Header bold
+            if row_idx == 0:
+                cell.font = Font(bold=True)
+
+    # Auto column width
+    for col in ws.columns:
+        max_length = 0
+        col_letter = col[0].column_letter  # A, B, C ...
+        for cell in col:
+            try:
+                if cell.value:
+                    max_length = max(max_length, len(str(cell.value)))
+            except:
+                pass
+        adjusted_width = (max_length + 2)  # thoda extra space
+        ws.column_dimensions[col_letter].width = adjusted_width
+
+# Save final file
+wb.save(output_file)
+
+print("✅ Final Excel ready with borders, bold headers & auto column width:", output_file)
