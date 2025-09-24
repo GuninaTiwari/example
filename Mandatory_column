@@ -1,0 +1,103 @@
+from bs4 import BeautifulSoup
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import Border, Side, Font
+
+# HTML file 
+html_file = "Oracle eTRM.html"
+
+# HTML file read
+with open(html_file, "r", encoding="utf-8") as f:
+    soup = BeautifulSoup(f, "html.parser")
+
+# Excel writer
+output_file = "output.xlsx"
+writer = pd.ExcelWriter(output_file, engine="openpyxl")
+
+# List to store all table names
+all_table_names = []
+
+# Find all Table: sections
+for tag in soup.find_all(string=lambda t: "Table:" in t):
+    table_name = tag.split("Table:")[-1].strip()
+    all_table_names.append(table_name)
+
+    # "Columns" section
+    columns_heading = tag.find_next(string=lambda t: "Columns" in t)
+    table_tag = columns_heading.find_next("table") if columns_heading else None
+
+    if table_tag:
+        try:
+            df = pd.read_html(str(table_tag), flavor="lxml")[0]
+        except:
+            df = pd.read_html(str(table_tag), flavor="html5lib")[0]
+
+        # Add new columns
+        df.insert(0, "Sequence No.", range(1, len(df) + 1))
+        df.insert(1, "Table Name", table_name)
+
+        # Sheet name 
+        safe_name = table_name[:50]
+
+        # Write name in excel
+        df.to_excel(writer, sheet_name=safe_name, index=False)
+
+# Save file
+writer.close()
+
+# Open file to add borders, bold headers & auto column width
+wb = load_workbook(output_file)
+thin_border = Border(
+    left=Side(style="thin"),
+    right=Side(style="thin"),
+    top=Side(style="thin"),
+    bottom=Side(style="thin")
+)
+
+for sheet in wb.sheetnames:
+    ws = wb[sheet]
+    
+    # Find "Mandatory" column index
+    mandatory_col_idx = None
+    for idx, cell in enumerate(ws[1], start=1):  # first row headers
+        if str(cell.value).strip().lower() == "mandatory":
+            mandatory_col_idx = idx
+            break
+
+    # If Mandatory column exists
+    if mandatory_col_idx:
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):  # start from row 2 (skip header)
+            cell = ws.cell(row=row_idx, column=mandatory_col_idx)
+            if str(cell.value).strip().lower() == "y":   # अगर "y"
+                cell.value = "Yes"
+            elif cell.value in (None, "", "nan"):       # अगर blank/null
+                cell.value = "No"
+
+    # Borders + header bold + auto column width
+    for row_idx, row in enumerate(ws.iter_rows()):
+        for cell in row:
+            cell.border = thin_border
+            if row_idx == 0:  # header row
+                cell.font = Font(bold=True)
+
+    # Auto column width
+    for col in ws.columns:
+        max_length = 0
+        col_letter = col[0].column_letter
+        for cell in col:
+            try:
+                if cell.value:
+                    max_length = max(max_length, len(str(cell.value)))
+            except:
+                pass
+        ws.column_dimensions[col_letter].width = max_length + 2
+
+# Save final file
+wb.save(output_file)
+
+print("✅ Final Excel ready with Mandatory column updated:", output_file)
+print(f"📊 Total 'Table:' occurrences found: {len(all_table_names)}")
+
+print("📝 Table names found:")
+for name in all_table_names:
+    print("   -", name)
