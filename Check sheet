@@ -1,0 +1,16 @@
+from openpyxl import load_workbook
+
+# Path of Excel file
+file_path = "output.xlsx"
+
+# Load workbook
+wb = load_workbook(file_path)
+
+# Get all sheet names
+sheet_names = wb.sheetnames
+
+# Print details
+print(f"📊 The Excel file has {len(sheet_names)} sheets.")
+print("📝 Sheet names:")
+for name in sheet_names:
+    print("   -", name)
