@@ -1,0 +1,90 @@
+from bs4 import BeautifulSoup
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import Border, Side, Font
+
+html_file = "AR.html"
+with open(html_file, "r") as f:
+    soup = BeautifulSoup(f, "html.parser")
+
+output_file = "AR_sheet.xlsx"
+writer = pd.ExcelWriter(output_file, engine="openpyxl")
+
+tables = list(soup.find_all(string=lambda t: "Table:" in t))
+
+for i, tag in enumerate(tables):
+    table_name = tag.split("Table:")[-1].strip()
+
+    # Current Table → find correct boundary of next table
+    next_table = tables[i + 1] if i + 1 < len(tables) else None
+
+    columns_heading = tag.find_next(string=lambda t: "Columns" in t)
+    table_tag = columns_heading.find_next("table") if columns_heading else None
+
+    if not table_tag:
+        continue
+
+    df = pd.read_html(str(table_tag))[0]
+
+    df.insert(0, "Sequence No.", range(1, len(df) + 1))
+    df.insert(1, "Table Name", table_name)
+
+    df["Date Format"] = ""
+    df["Primary Key (Yes/No)"] = "No"
+    df["Foreign Key (Yes/No)"] = ""
+    df["Foreign Key Table"] = ""
+    df["Pll data (Yes/No)"] = ""
+
+    # ✅ Date Format
+    if "Datatype" in df.columns:
+        df.loc[df["Datatype"].astype(str).str.contains("date", case=False, na=False),
+               "Date Format"] = "DD-MON-YY"
+
+    # ✅ PRIMARY KEY (STRICT same table only)
+    search_start = columns_heading
+    search_end = next_table
+
+    pk_heading = search_start.find_next(
+        string=lambda t: "Primary Key" in t and (search_end is None or t < search_end)
+    )
+
+    if pk_heading:
+        text = pk_heading.strip()
+
+        if not text.endswith("_UK1"):
+            pk_list = []
+            list_tag = pk_heading.find_next(["ol", "ul"])
+
+            if list_tag and (search_end is None or list_tag < search_end):
+                for li in list_tag.find_all("li"):
+                    colname = li.text.split(".")[-1].strip().upper()
+                    pk_list.append(colname)
+
+            if pk_list and "Name" in df.columns:
+                df["Primary Key (Yes/No)"] = (
+                    df["Name"].astype(str).str.upper().isin(pk_list)
+                    .map({True: "Yes", False: "No"})
+                )
+
+    df.to_excel(writer, sheet_name=table_name[:50], index=False)
+
+writer.close()
+
+# ✅ Formatting
+wb = load_workbook(output_file)
+thin = Border(left=Side(style="thin"), right=Side(style="thin"),
+              top=Side(style="thin"), bottom=Side(style="thin"))
+
+for sheet in wb.sheetnames:
+    ws = wb[sheet]
+    for i, row in enumerate(ws.iter_rows()):
+        for cell in row:
+            cell.border = thin
+            if i == 0:
+                cell.font = Font(bold=True)
+
+    for col in ws.columns:
+        ws.column_dimensions[col[0].column_letter].width = max(len(str(c.value)) if c.value else 0 for c in col) + 2
+
+wb.save(output_file)
+print("✅ Excel Updated Successfully ✅")
