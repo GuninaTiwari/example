@@ -1,0 +1,187 @@
+from bs4 import BeautifulSoup, NavigableString, Tag
+import re
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import Border, Side, Font
+
+# HTML file 
+html_file = "AR.html"
+
+# Read HTML
+with open(html_file, "r", encoding="utf-8") as f:
+    soup = BeautifulSoup(f, "html.parser")
+
+# Excel writer
+output_file = "AR.xlsx"
+writer = pd.ExcelWriter(output_file, engine="openpyxl")
+
+# Find all "Table:" sections
+for tag in soup.find_all(text=lambda t: "Table:" in t):
+    table_name = tag.split("Table:")[-1].strip()
+
+    # Find the "Columns" section (boundary for PK scanning)
+    columns_heading = tag.find_next(string=lambda t: "Columns" in t)
+    table_tag = columns_heading.find_next("table") if columns_heading else None
+
+    # ------------------- Primary Key Extraction (UNCHANGED) -------------------
+    pk_list = []
+    if columns_heading:
+        scanning_for_pk = False
+        for elem in tag.next_elements:
+            if elem == columns_heading:
+                break
+
+            text = ""
+            if isinstance(elem, Tag):
+                text = elem.get_text(separator=" ", strip=True)
+            elif isinstance(elem, NavigableString):
+                text = str(elem).strip()
+
+            if not text:
+                continue
+
+            if re.search(r"Primary\s*Key", text, flags=re.IGNORECASE):
+                if re.search(r"_UK1\s*$", text, flags=re.IGNORECASE):
+                    scanning_for_pk = False
+                    continue
+                scanning_for_pk = True
+                continue
+
+            if scanning_for_pk:
+                if isinstance(elem, Tag) and elem.name in ["h1", "h2", "h3", "h4", "h5", "h6"]:
+                    scanning_for_pk = False
+                    continue
+
+                if isinstance(elem, Tag) and elem.name in ["ol", "ul"]:
+                    for li in elem.find_all("li"):
+                        li_text = re.sub(r"^\s*\d+\.\s*", "", li.get_text(strip=True))
+                        if li_text:
+                            pk_list.append(li_text)
+                    scanning_for_pk = False
+                    break
+
+                if isinstance(elem, NavigableString):
+                    m = re.match(r"^\s*\d+\.\s*(.+)", text)
+                    if m:
+                        pk_list.append(m.group(1).strip())
+
+    pk_list = [p.strip().upper() for p in pk_list]
+
+    # ------------------- Foreign Key Extraction (NEW ✅) -------------------
+    fk_list = []
+    fk_mapping = {}
+
+    fk_heading = tag.find_next(string=lambda t: "Foreign Keys from this table" in t)
+
+    if fk_heading:
+        fk_table = fk_heading.find_next("table")
+
+        if fk_table:
+            try:
+                fk_df = pd.read_html(str(fk_table), flavor="lxml")[0]
+            except:
+                fk_df = pd.read_html(str(fk_table), flavor="html5lib")[0]
+
+            # Normalize columns
+            cols_lower = [c.strip().lower() for c in fk_df.columns]
+
+            # FIND the correct FK column name
+            fk_col_candidates = ["foreign key column", "foreign key", "fk column"]
+            fk_col = None
+            for key in fk_col_candidates:
+                if key in cols_lower:
+                    fk_col = fk_df.columns[cols_lower.index(key)]
+                    break
+
+            foreign_table_col = None
+            for key in ["foreign table", "referenced table"]:
+                if key in cols_lower:
+                    foreign_table_col = fk_df.columns[cols_lower.index(key)]
+                    break
+
+            if fk_col:
+                for i, fk in enumerate(fk_df[fk_col].astype(str)):
+                    # Extract column name cleanly
+                    if "." in fk:
+                        tab, col = fk.split(".", 1)
+                        col_clean = col.strip().upper()
+                    else:
+                        col_clean = fk.strip().upper()
+
+                    fk_list.append(col_clean)
+
+                    # Store table name if exists
+                    if foreign_table_col:
+                        fk_mapping[col_clean] = fk_df[foreign_table_col].iloc[i].strip()
+
+    fk_set = set(fk_list)
+
+    # ------------------- Process Columns Table + Mark PK + FK -------------------
+    if table_tag:
+        try:
+            df = pd.read_html(str(table_tag), flavor="lxml")[0]
+        except:
+            df = pd.read_html(str(table_tag), flavor="html5lib")[0]
+
+        df.insert(0, "Sequence No.", range(1, len(df) + 1))
+        df.insert(1, "Table Name", table_name)
+
+        df["Date Format"] = ""
+        df["Primary Key (Yes/No)"] = ""
+        df["Foreign Key (Yes/No)"] = ""
+        df["Foreign Key Table"] = ""
+        df["Pll data (Yes/No)"] = ""
+
+        # Date Format
+        for col in df.columns:
+            if col.strip().lower() in ["datatype", "data type", "data_type"]:
+                df.loc[df[col].astype(str).str.contains("date", case=False, na=False),
+                       "Date Format"] = "DD-MON-YY"
+                break
+
+        # Name column detect
+        name_col = None
+        for col in df.columns:
+            if col.strip().lower() == "name":
+                name_col = col
+                break
+
+        # Apply PK
+        if name_col and pk_list:
+            df["Primary Key (Yes/No)"] = df[name_col].str.upper().isin(pk_list).map({True: "Yes", False: "No"})
+        else:
+            df["Primary Key (Yes/No)"] = "No"
+
+        # Apply FK ✅
+        if name_col:
+            df["Foreign Key (Yes/No)"] = df[name_col].str.upper().isin(fk_set).map({True: "Yes", False: "No"})
+            df["Foreign Key Table"] = df[name_col].str.upper().map(lambda x: fk_mapping.get(x, ""))
+
+        # Save sheet
+        safe_name = table_name[:50]
+        df.to_excel(writer, sheet_name=safe_name, index=False)
+
+writer.close()
+
+# ------------------- Styling -------------------
+wb = load_workbook(output_file)
+thin_border = Border(left=Side(style="thin"), right=Side(style="thin"),
+                     top=Side(style="thin"), bottom=Side(style="thin"))
+
+for sheet in wb.sheetnames:
+    ws = wb[sheet]
+    for row_idx, row in enumerate(ws.iter_rows()):
+        for cell in row:
+            cell.border = thin_border
+            if row_idx == 0:
+                cell.font = Font(bold=True)
+
+    for col in ws.columns:
+        col_letter = col[0].column_letter
+        max_len = max(len(str(cell.value)) if cell.value else 0 for cell in col)
+        ws.column_dimensions[col_letter].width = max_len + 4
+
+wb.save(output_file)
+
+print("✅ Completed:", output_file)
+print("📊 Sheets:", len(wb.sheetnames))
