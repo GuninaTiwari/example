@@ -1,0 +1,133 @@
+from bs4 import BeautifulSoup
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import Border, Side, Font
+
+# HTML file 
+html_file = "AR.html"
+
+# Read HTML
+with open(html_file, "r", encoding="utf-8") as f:
+    soup = BeautifulSoup(f, "html.parser")
+
+# Excel writer
+output_file = "AR_sheet.xlsx"
+writer = pd.ExcelWriter(output_file, engine="openpyxl")
+
+# Find all "Table:" sections
+for tag in soup.find_all(text=lambda t: "Table:" in t):
+    table_name = tag.split("Table:")[-1].strip()
+
+    # Find the "Columns" section
+    columns_heading = tag.find_next(string=lambda t: "Columns" in t)
+    table_tag = columns_heading.find_next("table") if columns_heading else None
+
+    if table_tag:
+        try:
+            df = pd.read_html(str(table_tag), flavor="lxml")[0]
+        except:
+            df = pd.read_html(str(table_tag), flavor="html5lib")[0]
+
+        # Add sequence and table name
+        df.insert(0, "Sequence No.", range(1, len(df) + 1))
+        df.insert(1, "Table Name", table_name)
+
+        # ✅ Add extra columns
+        df["Date Format"] = ""
+        df["Primary Key (Yes/No)"] = ""
+        df["Foreign Key (Yes/No)"] = ""
+        df["Foreign Key Table"] = ""
+        df["Pll data (Yes/No)"] = ""
+
+        # ✅ Fill "Date Format" = "DD-MON-YY" where Datatype column contains 'date'
+        if "Datatype" in df.columns:
+            df.loc[
+                df["Datatype"].astype(str).str.lower().str.contains("date", na=False),
+                "Date Format"
+            ] = "DD-MON-YY"
+        else:
+            for col in df.columns:
+                if col.strip().lower() in ["data type", "data_type"]:
+                    df.loc[
+                        df[col].astype(str).str.lower().str.contains("date", na=False),
+                        "Date Format"
+                    ] = "DD-MON-YY"
+                    break
+
+        # ✅ Extract Primary Key columns only from sections ending with "_PK"
+        pk_columns = []
+        pk_section = tag.find_next(string=lambda t: t.strip().startswith("Primary Key:") and "_PK" in t)
+
+        while pk_section and "Table:" not in pk_section:
+            next_tag = pk_section.find_next(string=True)
+            while next_tag and not any(x in next_tag for x in ["Primary Key:", "Table:"]):
+                text = next_tag.strip()
+                # lines like "1. ACTION_NOTIFICATION_ID"
+                if text and (text[0].isdigit() or text.startswith("1.") or text.startswith("2.")):
+                    pk_name = text.split(".", 1)[-1].strip().upper()
+                    if pk_name:
+                        pk_columns.append(pk_name)
+                next_tag = next_tag.find_next(string=True)
+
+            pk_section = pk_section.find_next(string=lambda t: t.strip().startswith("Primary Key:") and "_PK" in t and "Table:" not in t)
+
+        pk_columns = list(set(pk_columns))  # remove duplicates
+
+        # ✅ Mark "Primary Key (Yes/No)"
+        target_col = None
+        for col in df.columns:
+            if col.strip().lower() in ["name", "column name", "column_name"]:
+                target_col = col
+                break
+
+        if target_col:
+            df["Primary Key (Yes/No)"] = df[target_col].astype(str).str.upper().isin(pk_columns).map({True: "Yes", False: "No"})
+        else:
+            df["Primary Key (Yes/No)"] = "No"
+
+        # Sheet name (max 50 chars)
+        safe_name = table_name[:50]
+
+        # Write sheet
+        df.to_excel(writer, sheet_name=safe_name, index=False)
+
+# Save Excel file
+writer.close()
+
+# Reopen for styling
+wb = load_workbook(output_file)
+thin_border = Border(
+    left=Side(style="thin"),
+    right=Side(style="thin"),
+    top=Side(style="thin"),
+    bottom=Side(style="thin")
+)
+
+# Apply formatting
+for sheet in wb.sheetnames:
+    ws = wb[sheet]
+
+    for row_idx, row in enumerate(ws.iter_rows()):
+        for cell in row:
+            cell.border = thin_border
+            if row_idx == 0:
+                cell.font = Font(bold=True)
+
+    # Auto column width
+    for col in ws.columns:
+        max_length = 0
+        col_letter = col[0].column_letter
+        for cell in col:
+            try:
+                if cell.value:
+                    max_length = max(max_length, len(str(cell.value)))
+            except:
+                pass
+        ws.column_dimensions[col_letter].width = max_length + 2
+
+# Save formatted Excel
+wb.save(output_file)
+
+print("✅ Final Excel ready:", output_file)
+wb = load_workbook(output_file)
+print(f"📊 The Excel file has {len(wb.sheetnames)} sheets.")
