@@ -1,0 +1,122 @@
+from bs4 import BeautifulSoup
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import Border, Side, Font
+
+# HTML file 
+html_file = "AR.html"
+
+# Read HTML
+with open(html_file, "r") as f:
+    soup = BeautifulSoup(f, "html.parser")
+
+# Excel writer
+output_file = "AR_sheet.xlsx"
+writer = pd.ExcelWriter(output_file, engine="openpyxl")
+
+# Find all "Table:" sections
+for tag in soup.find_all(text=lambda t: "Table:" in t):
+    table_name = tag.split("Table:")[-1].strip()
+
+    # ✅ Find Primary Key values (Just below "Primary Key:")
+    pk_heading = tag.find_next(string=lambda t: "Primary Key" in t)
+    primary_keys = []
+    if pk_heading:
+        ul = pk_heading.find_next("ul")
+        if ul:
+            primary_keys = [li.text.strip() for li in ul.find_all("li")]
+
+    # Find the "Columns" section
+    columns_heading = tag.find_next(string=lambda t: "Columns" in t)
+    table_tag = columns_heading.find_next("table") if columns_heading else None
+
+    if table_tag:
+        try:
+            df = pd.read_html(str(table_tag), flavor="lxml")[0]
+        except:
+            df = pd.read_html(str(table_tag), flavor="html5lib")[0]
+
+        # Add sequence and table name
+        df.insert(0, "Sequence No.", range(1, len(df) + 1))
+        df.insert(1, "Table Name", table_name)
+
+        # ✅ Add extra columns
+        df["Date Format"] = ""
+        df["Primary Key (Yes/No)"] = ""
+        df["Foreign Key (Yes/No)"] = ""
+        df["Foreign Key Table"] = ""
+        df["Pll data (Yes/No)"] = ""
+
+        # ✅ Fill date format logic
+        datatype_col = None
+        for col in df.columns:
+            if col.strip().lower() in ["datatype", "data type", "data_type"]:
+                datatype_col = col
+                break
+
+        if datatype_col:
+            df.loc[
+                df[datatype_col].astype(str).str.lower().str.contains("date", na=False),
+                "Date Format"
+            ] = "DD-MON-YY"
+
+        # ✅ Primary Key Fill Logic (Only match "Name" column)
+        name_col = None
+        for col in df.columns:
+            if col.strip().lower() == "name":
+                name_col = col
+                break
+
+        if name_col:
+            df["Primary Key (Yes/No)"] = df[name_col].apply(
+                lambda x: "YES" if str(x).strip() in primary_keys else "NO"
+            )
+
+        # Sheet name length safe
+        safe_name = table_name[:50]
+
+        # Write sheet
+        df.to_excel(writer, sheet_name=safe_name, index=False)
+
+# Save Excel file
+writer.close()
+
+# Reopen for styling
+wb = load_workbook(output_file)
+thin_border = Border(
+    left=Side(style="thin"),
+    right=Side(style="thin"),
+    top=Side(style="thin"),
+    bottom=Side(style="thin")
+)
+
+# Apply formatting
+for sheet in wb.sheetnames:
+    ws = wb[sheet]
+
+    for row_idx, row in enumerate(ws.iter_rows()):
+        for cell in row:
+            cell.border = thin_border
+            if row_idx == 0:
+                cell.font = Font(bold=True)
+
+    # Auto column width
+    for col in ws.columns:
+        max_length = 0
+        col_letter = col[0].column_letter
+        for cell in col:
+            try:
+                if cell.value:
+                    max_length = max(max_length, len(str(cell.value)))
+            except:
+                pass
+        ws.column_dimensions[col_letter].width = max_length + 2
+
+# Save formatted Excel
+wb.save(output_file)
+
+print("✅ Final Excel ready:", output_file)
+
+# Verify sheet count
+wb = load_workbook(output_file)
+print(f"📊 The Excel file has {len(wb.sheetnames)} sheets.")
