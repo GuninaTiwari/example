@@ -1,0 +1,189 @@
+from bs4 import BeautifulSoup, NavigableString, Tag
+import re
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import Border, Side, Font
+
+# HTML file 
+html_file = "AR.html"
+
+# Read HTML
+with open(html_file, "r", encoding="utf-8") as f:
+    soup = BeautifulSoup(f, "html.parser")
+
+# Excel writer
+output_file = "AR_sheet.xlsx"
+writer = pd.ExcelWriter(output_file, engine="openpyxl")
+
+# Find all "Table:" sections
+for tag in soup.find_all(text=lambda t: "Table:" in t):
+    table_name = tag.split("Table:")[-1].strip()
+
+    # Find the "Columns" section (the boundary where PK scanning should stop)
+    columns_heading = tag.find_next(string=lambda t: "Columns" in t)
+    table_tag = columns_heading.find_next("table") if columns_heading else None
+
+    # --- Primary Key extraction: scan only between 'tag' and 'columns_heading' ---
+    pk_list = []
+    if columns_heading:
+        # iterate from the Table: tag forward until Columns heading
+        scanning_for_pk = False
+        for elem in tag.next_elements:
+            # stop when we reached the Columns heading
+            if elem == columns_heading:
+                break
+
+            # if this element contains "Primary Key"
+            text = ""
+            if isinstance(elem, Tag):
+                text = elem.get_text(separator=" ", strip=True)
+            elif isinstance(elem, NavigableString):
+                text = str(elem).strip()
+            else:
+                continue
+
+            if not text:
+                continue
+
+            # detect heading that says Primary Key (case-insensitive)
+            if re.search(r"Primary\s*Key", text, flags=re.IGNORECASE):
+                # check skip rule: ignore if ends with _UK1 (case-insensitive)
+                if re.search(r"_UK1\s*$", text, flags=re.IGNORECASE):
+                    scanning_for_pk = False
+                    continue
+                # valid PK heading found — start collecting following list items
+                scanning_for_pk = True
+                continue
+
+            # if currently scanning for PK, collect list items
+            if scanning_for_pk:
+                # if we hit another heading which is not list, stop scanning
+                if isinstance(elem, Tag) and elem.name in ["h1", "h2", "h3", "h4", "h5", "h6"]:
+                    scanning_for_pk = False
+                    continue
+
+                # collect from ordered/unordered lists
+                if isinstance(elem, Tag) and elem.name in ["ol", "ul"]:
+                    for li in elem.find_all("li"):
+                        li_text = li.get_text(separator=" ", strip=True)
+                        # remove leading numbering like "1. " if present
+                        li_text = re.sub(r"^\s*\d+\.\s*", "", li_text)
+                        if li_text:
+                            pk_list.append(li_text.strip())
+                    # after reading list, stop scanning further PKs (take first valid PK block)
+                    scanning_for_pk = False
+                    break
+
+                # fallback: sometimes list items are plain text nodes like "1. COL_NAME"
+                if isinstance(elem, NavigableString):
+                    s = str(elem).strip()
+                    m = re.match(r"^\s*\d+\.\s*(.+)", s)
+                    if m:
+                        val = m.group(1).strip()
+                        if val:
+                            pk_list.append(val)
+                    # continue scanning - but don't loop forever
+
+    # Normalize pk_list (trim + uppercase)
+    pk_list = [p.strip().upper() for p in pk_list if p and p.strip()]
+
+    # Now process the Columns table as before
+    if table_tag:
+        try:
+            df = pd.read_html(str(table_tag), flavor="lxml")[0]
+        except:
+            df = pd.read_html(str(table_tag), flavor="html5lib")[0]
+
+        # Add sequence and table name
+        df.insert(0, "Sequence No.", range(1, len(df) + 1))
+        df.insert(1, "Table Name", table_name)
+
+        # ✅ Add extra columns
+        df["Date Format"] = ""
+        df["Primary Key (Yes/No)"] = ""
+        df["Foreign Key (Yes/No)"] = ""
+        df["Foreign Key Table"] = ""
+        df["Pll data (Yes/No)"] = ""
+
+        # ✅ Fill "Date Format" = "DD-MON-YY" where Datatype column contains 'date'
+        if "Datatype" in df.columns:
+            df.loc[
+                df["Datatype"].astype(str).str.lower().str.contains("date", na=False),
+                "Date Format"
+            ] = "DD-MON-YY"
+        else:
+            # handle possible variations in name like 'Data Type' or 'data_type'
+            for col in df.columns:
+                if col.strip().lower() in ["data type", "data_type"]:
+                    df.loc[
+                        df[col].astype(str).str.lower().str.contains("date", na=False),
+                        "Date Format"
+                    ] = "DD-MON-YY"
+                    break
+
+        # Determine Name column (exact "Name" or variant)
+        name_col = None
+        for col in df.columns:
+            if col.strip().lower() == "name":
+                name_col = col
+                break
+
+        # ✅ Apply Primary Key marking: match pk_list items with df[name_col]
+        if name_col:
+            if pk_list:
+                pk_set = set([p.upper() for p in pk_list])
+                df["Primary Key (Yes/No)"] = df[name_col].astype(str).apply(
+                    lambda x: "Yes" if str(x).strip().upper() in pk_set else "No"
+                )
+            else:
+                # no PK found for this table -> mark No for all rows
+                df["Primary Key (Yes/No)"] = "No"
+
+        # Sheet name (max 50 chars)
+        safe_name = table_name[:50]
+
+        # Write sheet
+        df.to_excel(writer, sheet_name=safe_name, index=False)
+
+# Save Excel file
+writer.close()
+
+# Reopen for styling
+wb = load_workbook(output_file)
+thin_border = Border(
+    left=Side(style="thin"),
+    right=Side(style="thin"),
+    top=Side(style="thin"),
+    bottom=Side(style="thin")
+)
+
+# Apply formatting
+for sheet in wb.sheetnames:
+    ws = wb[sheet]
+
+    for row_idx, row in enumerate(ws.iter_rows()):
+        for cell in row:
+            cell.border = thin_border
+            if row_idx == 0:
+                cell.font = Font(bold=True)
+
+    # Auto column width
+    for col in ws.columns:
+        max_length = 0
+        col_letter = col[0].column_letter
+        for cell in col:
+            try:
+                if cell.value:
+                    max_length = max(max_length, len(str(cell.value)))
+            except:
+                pass
+        ws.column_dimensions[col_letter].width = max_length + 2
+
+# Save formatted Excel
+wb.save(output_file)
+
+print("✅ Final Excel ready:", output_file)
+
+# Verify sheet count
+wb = load_workbook(output_file)
+print(f"📊 The Excel file has {len(wb.sheetnames)} sheets.")
