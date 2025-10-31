@@ -1,0 +1,85 @@
+from bs4 import BeautifulSoup
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import Border, Side, Font
+
+html_file = "AR.html"
+with open(html_file, "r") as f:
+    soup = BeautifulSoup(f, "html.parser")
+
+output_file = "AR_sheet.xlsx"
+writer = pd.ExcelWriter(output_file, engine="openpyxl")
+
+for tag in soup.find_all(text=lambda t: "Table:" in t):
+    table_name = tag.split("Table:")[-1].strip()
+
+    columns_heading = tag.find_next(string=lambda t: "Columns" in t)
+    table_tag = columns_heading.find_next("table") if columns_heading else None
+
+    if not table_tag:
+        continue
+
+    try:
+        df = pd.read_html(str(table_tag), flavor="lxml")[0]
+    except:
+        df = pd.read_html(str(table_tag), flavor="html5lib")[0]
+
+    df.insert(0, "Sequence No.", range(1, len(df) + 1))
+    df.insert(1, "Table Name", table_name)
+
+    df["Date Format"] = ""
+    df["Primary Key (Yes/No)"] = "No"
+    df["Foreign Key (Yes/No)"] = ""
+    df["Foreign Key Table"] = ""
+    df["Pll data (Yes/No)"] = ""
+
+    # Date Format auto
+    if "Datatype" in df.columns:
+        df.loc[df["Datatype"].astype(str).str.lower().str.contains("date", na=False),
+               "Date Format"] = "DD-MON-YY"
+
+    # ✅ PRIMARY KEY LOGIC
+    pk_heading = tag.find_next(string=lambda t: "Primary Key" in t)
+
+    if pk_heading:
+        text = pk_heading.strip()
+
+        # ❌ skip if ends with "_UK1"
+        if not text.endswith("_UK1"):
+
+            pk_list = []
+            list_tag = pk_heading.find_next(["ol", "ul"])
+
+            if list_tag:
+                for li in list_tag.find_all("li"):
+                    pk_list.append(li.text.split(".")[-1].strip().upper())
+
+            if "Name" in df.columns:
+                df["Primary Key (Yes/No)"] = df["Name"].astype(str).str.upper().isin(pk_list) \
+                                             .map({True: "Yes", False: "No"})
+
+    safe_name = table_name[:50]
+    df.to_excel(writer, sheet_name=safe_name, index=False)
+
+writer.close()
+
+# ✅ Formatting (Same as before)
+wb = load_workbook(output_file)
+thin = Border(left=Side(style="thin"), right=Side(style="thin"),
+              top=Side(style="thin"), bottom=Side(style="thin"))
+
+for sheet in wb.sheetnames:
+    ws = wb[sheet]
+    for i, row in enumerate(ws.iter_rows()):
+        for cell in row:
+            cell.border = thin
+            if i == 0:
+                cell.font = Font(bold=True)
+
+    for col in ws.columns:
+        length = max(len(str(c.value)) if c.value else 0 for c in col)
+        ws.column_dimensions[col[0].column_letter].width = length + 2
+
+wb.save(output_file)
+print("✅ Excel Updated ✅")
+print(f"📊 Sheets: {len(wb.sheetnames)}")
