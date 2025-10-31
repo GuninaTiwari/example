@@ -1,0 +1,137 @@
+from bs4 import BeautifulSoup, NavigableString, Tag
+import re
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import Border, Side, Font
+
+# HTML file 
+html_file = "AR.html"
+
+# Read HTML
+with open(html_file, "r") as f:
+    soup = BeautifulSoup(f, "html.parser")
+
+# Excel writer
+output_file = "AR.xlsx"
+writer = pd.ExcelWriter(output_file, engine="openpyxl")
+
+# Find all "Table:" sections
+for tag in soup.find_all(text=lambda t: "Table:" in t):
+    table_name = tag.split("Table:")[-1].strip()
+
+    columns_heading = tag.find_next(string=lambda t: "Columns" in t)
+    table_tag = columns_heading.find_next("table") if columns_heading else None
+
+    # ------------------- PRIMARY KEY -------------------
+    pk_list = []
+    if columns_heading:
+        scanning_for_pk = False
+        for elem in tag.next_elements:
+            if elem == columns_heading:
+                break
+            text = ""
+            if isinstance(elem, Tag):
+                text = elem.get_text(" ", strip=True)
+            elif isinstance(elem, NavigableString):
+                text = str(elem).strip()
+            if not text:
+                continue
+
+            if re.search(r"Primary\s*Key", text, re.I):
+                if re.search(r"_UK1\s*$", text, re.I):
+                    scanning_for_pk = False
+                    continue
+                scanning_for_pk = True
+                continue
+
+            if scanning_for_pk:
+                if isinstance(elem, Tag) and elem.name in ["ol", "ul"]:
+                    for li in elem.find_all("li"):
+                        li_text = re.sub(r"^\d+\.\s*", "", li.get_text(strip=True))
+                        if li_text:
+                            pk_list.append(li_text.upper())
+                    scanning_for_pk = False
+                    break
+
+                m = re.match(r"^\d+\.\s*(.+)", text)
+                if m:
+                    pk_list.append(m.group(1).strip().upper())
+
+    pk_list = list(set(pk_list))
+
+    # ------------------- FOREIGN KEY FROM THIS TABLE -------------------
+    fk_list = []
+    fk_heading = tag.find_next(string=lambda t: "Foreign Keys from this table" in t)
+
+    if fk_heading:
+        table_fk = fk_heading.find_next("table")
+        if table_fk:
+            try:
+                fk_df = pd.read_html(str(table_fk), flavor="lxml")[0]
+            except:
+                fk_df = pd.read_html(str(table_fk), flavor="html5lib")[0]
+
+            if "Foreign key" in fk_df.columns:
+                for val in fk_df["Foreign key"].dropna().astype(str):
+                    if "." in val:
+                        fk_col = val.split(".")[-1].strip().upper()
+                        fk_list.append(fk_col)
+
+    fk_list = list(set(fk_list))
+
+    # ✅ Build final sheet
+    if table_tag:
+        try:
+            df = pd.read_html(str(table_tag), flavor="lxml")[0]
+        except:
+            df = pd.read_html(str(table_tag), flavor="html5lib")[0]
+
+        df.insert(0, "Sequence No.", range(1, len(df) + 1))
+        df.insert(1, "Table Name", table_name)
+
+        df["Date Format"] = ""
+        df["Primary Key (Yes/No)"] = ""
+        df["Foreign Key (Yes/No)"] = ""
+        df["Foreign Key Table"] = ""
+        df["Pll data (Yes/No)"] = ""
+
+        if "Datatype" in df.columns:
+            df.loc[df["Datatype"].astype(str).str.contains("date", case=False, na=False),
+                   "Date Format"] = "DD-MON-YY"
+
+        name_col = None
+        for col in df.columns:
+            if col.strip().lower() == "name":
+                name_col = col
+                break
+
+        if name_col:
+            df["Primary Key (Yes/No)"] = df[name_col].astype(str).apply(
+                lambda x: "Yes" if x.strip().upper() in pk_list else "No"
+            )
+            df["Foreign Key (Yes/No)"] = df[name_col].astype(str).apply(
+                lambda x: "Yes" if x.strip().upper() in fk_list else "No"
+            )
+
+        df.to_excel(writer, sheet_name=table_name[:50], index=False)
+
+writer.close()
+
+# Formatting
+wb = load_workbook(output_file)
+thin = Border(left=Side(style="thin"), right=Side(style="thin"),
+              top=Side(style="thin"), bottom=Side(style="thin"))
+
+for sheet in wb.sheetnames:
+    ws = wb[sheet]
+    for r_i, row in enumerate(ws.iter_rows()):
+        for c in row:
+            c.border = thin
+            if r_i == 0:
+                c.font = Font(bold=True)
+    for col in ws.columns:
+        col_letter = col[0].column_letter
+        ws.column_dimensions[col_letter].width = max(len(str(c.value)) if c.value else 0 for c in col) + 4
+
+wb.save(output_file)
+print("✅ Final Excel ready:", output_file)
