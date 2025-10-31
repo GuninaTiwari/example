@@ -1,0 +1,85 @@
+from bs4 import BeautifulSoup
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import Border, Side, Font
+
+html_file = "AR.html"
+with open(html_file, "r") as f:
+    soup = BeautifulSoup(f, "html.parser")
+
+output_file = "AR_sheet.xlsx"
+writer = pd.ExcelWriter(output_file, engine="openpyxl")
+
+for tag in soup.find_all(text=lambda t: "Table:" in t):
+    table_name = tag.split("Table:")[-1].strip()
+
+    # Find Columns Table
+    columns_heading = tag.find_next(string=lambda t: "Columns" in t)
+    table_tag = columns_heading.find_next("table") if columns_heading else None
+
+    if table_tag:
+        try:
+            df = pd.read_html(str(table_tag), flavor="lxml")[0]
+        except:
+            df = pd.read_html(str(table_tag), flavor="html5lib")[0]
+
+        df.insert(0, "Sequence No.", range(1, len(df) + 1))
+        df.insert(1, "Table Name", table_name)
+
+        # New columns
+        df["Date Format"] = ""
+        df["Primary Key (Yes/No)"] = "No"
+        df["Foreign Key (Yes/No)"] = ""
+        df["Foreign Key Table"] = ""
+        df["Pll data (Yes/No)"] = ""
+
+        # Date format rule
+        if "Datatype" in df.columns:
+            df.loc[df["Datatype"].astype(str).str.lower().str.contains("date", na=False),
+                   "Date Format"] = "DD-MON-YY"
+
+        # ✅ PRIMARY KEY DETECTION
+        pk_columns = []
+        pk_section = tag.find_next(string=lambda t: "Primary Key" in t and table_name + "_PK" in t)
+        if pk_section:
+            # Find next list (ol/ul)
+            list_tag = pk_section.find_next(["ol", "ul"])
+            if list_tag:
+                for li in list_tag.find_all("li"):
+                    col = li.text.split(".")[-1].strip()  # Remove numbering
+                    pk_columns.append(col.upper())
+
+        # ✅ Mark YES where Name exists in pk_columns
+        if "Name" in df.columns:
+            df["Primary Key (Yes/No)"] = df["Name"].astype(str).str.upper().isin(pk_columns).map({True: "Yes", False: "No"})
+
+        safe_name = table_name[:50]
+        df.to_excel(writer, sheet_name=safe_name, index=False)
+
+writer.close()
+
+# Formatting
+wb = load_workbook(output_file)
+thin_border = Border(left=Side(style="thin"), right=Side(style="thin"),
+                     top=Side(style="thin"), bottom=Side(style="thin"))
+
+for sheet in wb.sheetnames:
+    ws = wb[sheet]
+
+    for row_idx, row in enumerate(ws.iter_rows()):
+        for cell in row:
+            cell.border = thin_border
+            if row_idx == 0:
+                cell.font = Font(bold=True)
+
+    for col in ws.columns:
+        max_len = 0
+        col_letter = col[0].column_letter
+        for cell in col:
+            if cell.value:
+                max_len = max(max_len, len(str(cell.value)))
+        ws.column_dimensions[col_letter].width = max_len + 2
+
+wb.save(output_file)
+print("✅ Final Excel ready:", output_file)
+print(f"📊 Sheets: {len(wb.sheetnames)}")
