@@ -1,0 +1,122 @@
+from bs4 import BeautifulSoup
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import Border, Side, Font
+
+# HTML file 
+html_file = "AR.html"
+
+# Read HTML
+with open(html_file, "r") as f:
+    soup = BeautifulSoup(f, "html.parser")
+
+# Excel writer
+output_file = "AR_sheet.xlsx"
+writer = pd.ExcelWriter(output_file, engine="openpyxl")
+
+# Find all "Table:" sections
+for tag in soup.find_all(text=lambda t: "Table:" in t):
+    table_name = tag.split("Table:")[-1].strip()
+
+    # ✅ Find Columns section
+    columns_heading = tag.find_next(string=lambda t: "Columns" in t)
+    table_tag = columns_heading.find_next("table") if columns_heading else None
+
+    # ✅ Find Primary Key section (before Columns and not ending with _UK1)
+    pk_list = []
+    pk_heading = tag.find_next(string=lambda t: "Primary Key" in t and "_UK1" not in t)
+
+    if pk_heading:
+        # Loop through next siblings until Columns section arrives
+        current = pk_heading
+        while current and "Columns" not in str(current):
+            # Extract PK entity lines -> remove indices ("1.", "2.")
+            if current.name is None:
+                text = current.get_text(strip=True)
+                if text and "." in text:
+                    entity = text.split(".", 1)[-1].strip()
+                    if entity and entity != "":
+                        pk_list.append(entity)
+            current = current.find_next()
+
+    if table_tag:
+        try:
+            df = pd.read_html(str(table_tag), flavor="lxml")[0]
+        except:
+            df = pd.read_html(str(table_tag), flavor="html5lib")[0]
+
+        # Insert Sequence and Table Name
+        df.insert(0, "Sequence No.", range(1, len(df) + 1))
+        df.insert(1, "Table Name", table_name)
+
+        # Extra columns
+        df["Date Format"] = ""
+        df["Primary Key (Yes/No)"] = ""
+        df["Foreign Key (Yes/No)"] = ""
+        df["Foreign Key Table"] = ""
+        df["Pll data (Yes/No)"] = ""
+
+        # ✅ Date Format
+        if "Datatype" in df.columns:
+            df.loc[
+                df["Datatype"].astype(str).str.lower().str.contains("date", na=False),
+                "Date Format"
+            ] = "DD-MON-YY"
+        else:
+            for col in df.columns:
+                if col.strip().lower() in ["data type", "data_type"]:
+                    df.loc[
+                        df[col].astype(str).str.lower().str.contains("date", na=False),
+                        "Date Format"
+                    ] = "DD-MON-YY"
+                    break
+
+        # ✅ Apply Primary Key mark only by matching against NAME column ↓
+        if pk_list and "Name" in df.columns:
+            df["Primary Key (Yes/No)"] = df["Name"].astype(str).apply(
+                lambda x: "Yes" if x.strip().upper() in [pk.upper() for pk in pk_list] else "No"
+            )
+        else:
+            df["Primary Key (Yes/No)"] = "No"
+
+        # Sheet name (max 50 chars)
+        safe_name = table_name[:50]
+
+        # Write sheet
+        df.to_excel(writer, sheet_name=safe_name, index=False)
+
+# Save Excel file
+writer.close()
+
+# Reopen for formatting
+wb = load_workbook(output_file)
+thin_border = Border(
+    left=Side(style="thin"),
+    right=Side(style="thin"),
+    top=Side(style="thin"),
+    bottom=Side(style="thin")
+)
+
+for sheet in wb.sheetnames:
+    ws = wb[sheet]
+    for row_idx, row in enumerate(ws.iter_rows()):
+        for cell in row:
+            cell.border = thin_border
+            if row_idx == 0:
+                cell.font = Font(bold=True)
+
+    # Auto column width
+    for col in ws.columns:
+        max_length = 0
+        col_letter = col[0].column_letter
+        for cell in col:
+            if cell.value:
+                max_length = max(max_length, len(str(cell.value)))
+        ws.column_dimensions[col_letter].width = max_length + 2
+
+wb.save(output_file)
+print("✅ Final Excel ready:", output_file)
+
+# ✅ Sheet count confirm
+wb = load_workbook(output_file)
+print(f"📊 Total Sheets Created: {len(wb.sheetnames)}")
